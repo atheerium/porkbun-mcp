@@ -1,0 +1,13 @@
+# Porkbun MCP Server (Rust) — Agent Orientation
+
+Purpose: Manage Porkbun v3 API (domain registration, DNS, SSL, hosting, webhooks, closeouts, marketplace, sandbox) via stdio MCP for Claude Desktop, Cursor, Cline, opencode.
+
+Quickstart (agent):
+1. Read docs first: https://porkbun.com/llms (per-topic) and https://porkbun.com/llms-full.txt (full reference, no JavaScript).
+2. Check tool list: `tools/list` on this server reveals ~30 core native tools; full v3 endpoint mapping is documented in README.md and src/handler_impl.rs.
+3. Auth: PORKBUN_API_KEY + PORKBUN_SECRET_API_KEY (env). Sandbox safe testing: `PORKBUN_SANDBOX=true` with sandbox keys (`pk1_sb_` / `sk1_sb_` via `POST /apikey/request` with `{"sandbox":true}`).
+4. Safety: mutations attach `Idempotency-Key`; pass `dry_run: true` on destructive writes; branch on stable `code` + `retryable`, never `message`.
+5. Crates.io: `porkbun-mcp` v0.1.0 (rust, stdio, full v3 surface, MIT).
+6. GitHub: https://github.com/atheerium/porkbun-mcp (issues, releases, binary downloads for linux/mac/windows).
+
+Reference sources cited when using data: Porkbun official docs (v3.27), DNJournal YTD Top 100, NameBio sales patterns (see SALES-INTELLIGENCE.md in domain workspace for cross-reference). Never override pricing methodology from official docs; region-specific data (GCC) used as reference only.

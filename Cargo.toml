@@ -1,0 +1,67 @@
+[package]
+name = "porkbun-mcp"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "MIT"
+description = "Porkbun MCP server in Rust — full Porkbun v3 API (domains, DNS, SSL, hosting, Cloudflare, webhooks, sandbox) exposed as Model Context Protocol tools for Claude Desktop, Cursor, Cline, opencode, and any stdio MCP client. Single static binary, idempotency-safe writes, sandbox-tested."
+repository = "https://github.com/atheerium/porkbun-mcp"
+homepage = "https://github.com/atheerium/porkbun-mcp"
+documentation = "https://docs.rs/porkbun-mcp"
+readme = "README.md"
+authors = ["atheerium <atheerium@users.noreply>"]
+keywords = ["mcp", "model-context-protocol", "porkbun", "dns", "domains", "ssl", "hosting", "rust", "claude", "cursor", "cline", "opencode", "std-mcp-server", "porkbun-api-v3"]
+categories = ["command-line-utilities", "web-programming", "development-tools"]
+
+[dependencies]
+# Official Rust SDK for MCP 2026-07-28 / 2025-11-25
+rmcp = { version = "3.0", features = ["server", "transport-io", "macros", "schemars"] }
+# Async HTTP client (pure-Rust TLS via rustls)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Async runtime
+tokio = { version = "1", features = ["full", "rt-multi-thread", "macros"] }
+# Schema generation (used with rmcp for JSON Schema)
+schemars = "0.8"
+# Error handling
+thiserror = "1.0"
+# UUID for idempotency keys
+uuid = { version = "1.10", features = ["v7", "serde"] }
+# CLI args (optional --version, --help for binary usability)
+clap = { version = "4.5", features = ["derive", "help"] }
+# Tracing / logging (structured, no secret leakage)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+# Time (TTL / expiration parsing)
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+# Mock HTTP server for integration tests
+wiremock = "0.6"
+tokio-test = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "porkbun-mcp"
+path = "src/main.rs"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.cargo-vcs-info]
+git = "sha"
