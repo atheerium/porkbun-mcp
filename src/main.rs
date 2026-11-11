@@ -1,5 +1,4 @@
-//! Simple manual stdio MCP server that avoids macro parsing issues.
-//! Tools are exposed statically; all 91 categories exist in the source architecture (see src/handler_impl.rs for signatures and README.md for full endpoint map).
+//! Manual stdio MCP server — real Porkbun v3 API dispatch with dryRun support.
 use serde_json::{json, Value};
 use std::io::{self, Write};
 use tracing::info;
@@ -8,20 +7,23 @@ mod config;
 mod client;
 
 use config::Config;
+use client::PorkbunClient;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    info!("Porkbun MCP v0.1.0 starting (Rust stdio manual server)");
-    let cfg = Config::from_env().expect("Config loaded");
-    info!("Config loaded; sandbox={}, docs_only={}", cfg.sandbox, cfg.docs_only);
+    info!("Porkbun MCP v0.1.0 starting (Rust stdio server); docs: https://github.com/atheerium/porkbun-mcp");
+    let cfg = Config::from_env().expect("Config loaded; set PORKBUN_API_KEY + PORKBUN_SECRET_API_KEY (or PORKBUN_DOCS_ONLY=true / PORKBUN_SANDBOX=true)");
+    info!("sandbox={}, docs_only={}, has_keys={}, sandbox_key={}", cfg.sandbox, cfg.docs_only, cfg.has_keys(), cfg.is_sandbox_key());
+    let client = PorkbunClient::new(cfg.clone());
 
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut line = String::new();
+    let id_key_fn = || format!("pbmcp-{}", uuid::Uuid::now_v7());
 
     loop {
         line.clear();
-        if stdin.read_line(&mut line).unwrap_or(0) == 0 {
+        if std::io::stdin().read_line(&mut line).unwrap_or(0) == 0 {
             info!("stdin closed; shutting down");
             break;
         }
@@ -31,80 +33,24 @@ fn main() {
 
         let result = match method {
             "initialize" => {
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {"tools":{}},
-                        "serverInfo": {"name":"porkbun-mcp","version":"0.1.0","description":"Porkbun MCP server in Rust — full v3 API (domains, DNS, SSL, hosting, Cloudflare, webhooks, sandbox) as stdio MCP tools."},
-                        "instructions": "Configure with PORKBUN_API_KEY + PORKBUN_SECRET_API_KEY env vars. Use PORKBUN_SANDBOX=true for safe dry-run testing. Full endpoint reference: https://porkbun.com/llms-full.txt"
-                    }
-                })
+                let init_inner = json!({"protocolVersion":"2024-11-05","capabilities":{"tools":{"description":"36 native tools; mutations use Idempotency-Key; dryRun supported"}},"serverInfo":{"name":"porkbun-mcp","version":"0.1.0","description":"Porkbun MCP server in Rust — full v3 API (domains, DNS, SSL, hosting, Cloudflare, webhooks, sandbox) as stdio MCP tools."}});
+                json!({"jsonrpc":"2.0","id":id,"result":init_inner})
             }
             "notifications/initialized" => {
-                info!("Client initialized notification received");
-                continue; // no response for notifications
+                info!("Client initialized");
+                continue;
             }
             "tools/list" => {
-                let tools = vec![
-                    json!({"name":"ping","description":"Verify Porkbun API connectivity."}),
-                    json!({"name":"get_ip","description":"Get caller public IP."}),
-                    json!({"name":"check_domain","description":"Check domain availability and pricing."}),
-                    json!({"name":"get_pricing","description":"Public pricing for TLDs."}),
-                    json!({"name":"list_domains","description":"List/filter account domains."}),
-                    json!({"name":"get_domain","description":"Get single domain metadata."}),
-                    json!({"name":"get_nameservers","description":"Retrieve registry NS set."}),
-                    json!({"name":"update_nameservers","description":"Replace nameserver set (full set)."}),
-                    json!({"name":"update_auto_renew","description":"Toggle auto-renew."}),
-                    json!({"name":"get_account_balance","description":"Account balance."}),
-                    json!({"name":"get_api_settings","description":"API spend settings."}),
-                    json!({"name":"list_dns_records","description":"Retrieve editable DNS records."}),
-                    json!({"name":"create_dns_record","description":"Create DNS record (idempotency-safe)."}),
-                    json!({"name":"edit_dns_record","description":"Edit DNS record by ID."}),
-                    json!({"name":"delete_dns_record","description":"Delete DNS record by ID."}),
-                    json!({"name":"scan_dns_records","description":"Live NS scan (read-only)."}),
-                    json!({"name":"import_dns_records","description":"Bulk create records (max 500)."}),
-                    json!({"name":"get_dnssec_records","description":"Retrieve DNSSEC DS records."}),
-                    json!({"name":"create_dnssec_record","description":"Submit DNSSEC DS record."}),
-                    json!({"name":"delete_dnssec_record","description":"Delete DNSSEC by key tag."}),
-                    json!({"name":"get_ssl_bundle","description":"Retrieve SSL certificate bundle."}),
-                    json!({"name":"search_closeouts","description":"Search expired closeouts."}),
-                    json!({"name":"list_hosting_plans","description":"List hosting SKUs."}),
-                    json!({"name":"create_hosting","description":"Provision hosting by SKU."}),
-                    json!({"name":"create_wp_credentials","description":"Mint WordPress application password."}),
-                    json!({"name":"get_cloudflare_connection","description":"Check CF connect status."}),
-                    json!({"name":"connect_domains_to_cloudflare","description":"Queue domain move to Cloudflare."}),
-                    json!({"name":"rollback_cloudflare_domain","description":"Undo Cloudflare move."}),
-                    json!({"name":"list_webhooks","description":"List webhook endpoints."}),
-                    json!({"name":"create_webhook","description":"Register webhook endpoint."}),
-                    json!({"name":"create_sandbox_key","description":"Mint sandbox key (no auth needed)."}),
-                    json!({"name":"sandbox_topup","description":"Grant fake credit in sandbox."}),
-                    json!({"name":"sandbox_reset","description":"Reset sandbox to clean state."}),
-                    json!({"name":"mock_call","description":"Schema-accurate mock response (no auth)."}),
-                    json!({"name":"search_docs","description":"Search Porkbun docs (no auth)."}),
-                    json!({"name":"list_doc_topics","description":"List doc topics index (no auth)."}),
-                ];
-                json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools,"_meta":{"count":tools.len(),"note":"Full v3 coverage (91 endpoints) documented at https://porkbun.com/llms; see src/handler_impl.rs for all category signatures."}}})
-            }
-            "tools/call" => {
+                let arr_str = r#"[{"name":"ping","description":"Verify Porkbun API connectivity and confirm keys work; safe read; no spend; dryRun safe.","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"get_ip","description":"Get the public IP of the current caller (no auth required).","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"check_domain","description":"Check domain availability + pricing (registration/renewal/transfer); required pre-step before register/renew/transfer; supports dryRun preview.","inputSchema":{"type":"object","properties":{"domain":{"type":"string","description":"Domain name to check (e.g. example.com)"}}},"required":["domain"],"annotations":{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"get_pricing","description":"Retrieve pricing for all supported TLDs (public endpoint; no auth required); supports tlds_filter array.","inputSchema":{"type":"object","properties":{"tlds_filter":{"type":"array","items":{"type":"string"}}}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"list_domains","description":"List/filter account domains by tld, expiringWithinDays, autoRenew, apiAccess, nameContains, sort; pagination via start.","inputSchema":{"type":"object","properties":{"tlds":{"type":"array","items":{"type":"string"}},"expiring_within_days":{"type":"integer"},"auto_renew":{"type":"string"},"api_access":{"type":"string"},"name_contains":{"type":"string"},"sort_name":{"type":"string"},"sort_direction":{"type":"string"},"start":{"type":"integer"}}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"get_domain","description":"Get single domain metadata (same shape as listAll items).","inputSchema":{"type":"object","properties":{"domain":{"type":"string","description":"Fully qualified domain name"}}},"required":["domain"],"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"get_nameservers","description":"Retrieve authoritative nameservers at registry; unordered set per RFC 1034/2181; compare as set.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"}}},"required":["domain"],"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"update_nameservers","description":"Replace full nameserver list (full set replacement, not append); registry may reorder; dryRun supported.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"ns":{"type":"array","items":{"type":"string"}},"dry_run":{"type":"boolean"}}},"required":["domain","ns"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"update_auto_renew","description":"Turn auto-renew on/off for a domain; mutation with Idempotency-Key.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"status":{"type":"string","description":"on or no"}}},"required":["domain","status"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"get_account_balance","description":"Get Porkbun account credit balance in cents + display string (read-only).","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"get_api_settings","description":"Retrieve monthly spend cap, current MTD spend, low-balance alert, auto top-up settings.","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"list_dns_records","description":"Retrieve all editable DNS records for a domain; excludes SOA/default NS records; reports cloudflare proxy status.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"}}},"required":["domain"],"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"create_dns_record","description":"Create DNS record (A/AAAA/CNAME/MX/TXT/NS/SRV/CAA/TLSA/SSHFP/ALIAS/HTTPS/SVCB); idempotency-safe; dryRun; mutation with auto Idempotency-Key (UUIDv7).","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"name":{"type":"string","description":"Subdomain label (e.g. www, *, blank for root)"},"record_type":{"type":"string","description":"DNS record type"},"content":{"type":"string","description":"Record value"},"ttl":{"type":"integer","description":"TTL seconds (min set by account)"},"prio":{"type":"integer","description":"MX/SRV priority"},"notes":{"type":"string"},"dry_run":{"type":"boolean","description":"Validate only, no mutation"}}},"required":["domain","record_type","content"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"edit_dns_record","description":"Edit existing DNS record by numeric ID; mutation with Idempotency-Key; dryRun.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"id":{"type":"string","description":"Numeric DNS record ID"},"record_type":{"type":"string"},"content":{"type":"string"},"ttl":{"type":"integer"},"prio":{"type":"integer"},"notes":{"type":"string"}}},"required":["domain","id","record_type","content"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"delete_dns_record","description":"Delete DNS record by numeric ID; protected: SOA/default NS records cannot be deleted; mutation with Idempotency-Key.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"id":{"type":"string","description":"Numeric record ID"}}},"required":["domain","id"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"scan_dns_records","description":"Discover live records from the domain's current live nameservers; read-only; use before registry transfer (transfer carries no zone data).","inputSchema":{"type":"object","properties":{"domain":{"type":"string"}}},"required":["domain"],"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"import_dns_records","description":"Bulk-create up to 500 DNS records (idempotent; skips duplicates); maximum 500 per call; mutation with Idempotency-Key.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"records":{"type":"array","description":"Array of record objects"}}},"required":["domain","records"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"get_dnssec_records","description":"Retrieve DNSSEC DS records published at the registry.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"}}},"required":["domain"],"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"create_dnssec_record","description":"Submit a DNSSEC DS record to registry (keyTag, alg, digestType, digest); mutation with Idempotency-Key.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"key_tag":{"type":"string","description":"DNSSEC key tag"},"alg":{"type":"string","description":"Algorithm number (e.g. 13)"},"digest_type":{"type":"string","description":"Digest type (e.g. 2 for SHA-256)"},"digest":{"type":"string","description":"Hex-encoded digest"}}},"required":["domain","key_tag","alg","digest_type","digest"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"delete_dnssec_record","description":"Remove a DNSSEC DS record by key tag; mutation with Idempotency-Key.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"keytag":{"type":"string","description":"Key tag value"}}},"required":["domain","keytag"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"get_ssl_bundle","description":"Retrieve the free Porkbun-issued SSL certificate bundle (certificate chain + intermediates + private key + public key PEM) for a registered domain.","inputSchema":{"type":"object","properties":{"domain":{"type":"string","description":"Fully qualified registered domain"}}},"required":["domain"],"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"search_closeouts","description":"Search expired-domain closeouts; filter by keyword, tld, name length, age range, price range; sort options.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"Search query"},"tld":{"type":"string"},"name_length":{"type":"integer"},"price_min":{"type":"integer","description":"Cents"},"price_max":{"type":"integer","description":"Cents"},"age_min":{"type":"integer"},"age_max":{"type":"integer"},"sort_by":{"type":"string","description":"Sort field"},"limit":{"type":"integer","description":"Results per page"},"start":{"type":"integer","description":"Pagination offset"}}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"list_hosting_plans","description":"List hosting products (Static / WordPress) with SKU, price, interval, trial.","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"create_hosting","description":"Provision hosting by SKU (free 15-day trial); mutation; dryRun.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"sku":{"type":"string","description":"SKU from list_hosting_plans"},"acknowledged_cost":{"type":"boolean"},"agree_to_terms":{"type":"string","description":"yes or 1"},"agree_to_nameserver_change":{"type":"boolean"},"dry_run":{"type":"boolean"}}},"required":["domain","sku","acknowledged_cost","agree_to_terms","agree_to_nameserver_change"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"create_wp_credentials","description":"Mint WordPress Application Password (editor default; admin requires acknowledgeFullAccess); mutation.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"},"role":{"type":"string","enum":["editor","administrator"]},"acknowledge_full_access":{"type":"boolean","default":false}}},"required":["domain"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"get_cloudflare_connection","description":"Check Cloudflare grant status; returns authorization URL if needed (one-time human step).","inputSchema":{"type":"object","properties":{"domain":{"type":"string"}}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"connect_domains_to_cloudflare","description":"Queue domain(s) for Cloudflare account move (asynchronous); mutation; dryRun.","inputSchema":{"type":"object","properties":{"domains":{"type":"array","items":{"type":"string"}},"dry_run":{"type":"boolean"}}},"required":["domains"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"rollback_cloudflare_domain","description":"Undo Cloudflare move; mutation.","inputSchema":{"type":"object","properties":{"domain":{"type":"string"}}},"required":["domain"],"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"list_webhooks","description":"List webhook endpoints (URL, events, status, health, secret rotation).","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"create_webhook","description":"Register webhook endpoint (public https://443 with resolving hostname); mutation; returns signing secret.","inputSchema":{"type":"object","properties":{"url":{"type":"string","format":"uri","description":"Public HTTPS URL"},"events":{"type":"array","items":{"type":"string"},"description":"Subscribed events"},"status_active":{"type":"boolean","default":true,"description":"ACTIVE or DISABLED"}}},"required":["url","events"],"annotations":{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}},{"name":"create_sandbox_key","description":"Instant sandbox key (pk1_sb_ / sk1_sb_); $1000 fake credit; zero auth needed; safe dry-run; no real registry actions, charges, or DNS changes; ideal for agent testing.","inputSchema":{"type":"object","properties":{"sandbox":{"type":"boolean","default":true,"description":"Always true"}}},"annotations":{"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}},{"name":"sandbox_topup","description":"Grant fake account credit in sandbox (default $1000); mutation.","inputSchema":{"type":"object","properties":{"amount":{"type":"integer","default":1000,"description":"Cents"}}},"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"sandbox_reset","description":"Reset sandbox account (domains, DNS, orders, credit) and re-grant $1000 fake credit; mutation.","inputSchema":{"type":"object","properties":{"sandbox":{"type":"boolean","default":true}}},"annotations":{"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}},{"name":"mock_call","description":"Schema-accurate mock response for any endpoint (e.g. /mock/domain/listAll, /mock/dns/create/example.com); zero auth; no datastore; safe for agent schema exploration.","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"Endpoint path (e.g. domain/listAll)"},"error_shape":{"type":"boolean","default":false,"description":"If true, error-response shape"}}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}},{"name":"search_docs","description":"Search Porkbun docs by keyword; no auth; full reference /llms-full.txt and per-topic /llms pages.","inputSchema":{"type":"object","properties":{"keywords":{"type":"array","items":{"type":"string"},"description":"Search keywords (e.g. register domain)"},"max_results":{"type":"integer","default":10,"description":"Maximum results"}}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}},{"name":"list_doc_topics","description":"Doc topics index (dns, domain, webhooks, closeouts, guides); no auth; read-only.","inputSchema":{"type":"object","properties":{}},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}}]"#;
+                let parsed: Vec<Value> = serde_json::from_str(arr_str).unwrap();
+                json!({"jsonrpc":"2.0","id":id,"result":{"tools":Value::Array(parsed.iter().map(|v| v.clone()).collect()),"_meta":{"count":36,"note":"Full 91 endpoint categories at https://porkbun.com/llms; mutations attach Idempotency-Key; dryRun supported on destructive writes; sandbox safe via PORKBUN_SANDBOX=true; docs-only PORKBUN_DOCS_ONLY=true"}}})
+            }            "tools/call" => {
                 let params = msg.get("params").cloned().unwrap_or(json!({}));
+                let args = params.get("arguments").cloned().unwrap_or(json!({}));
                 let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                info!("tools/call: {}", name);
-                let response_text = match name {
-                    "ping" | "get_ip" | "check_domain" | "get_pricing" | "list_domains" | "get_domain" |
-                    "get_nameservers" | "update_nameservers" | "update_auto_renew" | "get_account_balance" |
-                    "get_api_settings" | "list_dns_records" | "create_dns_record" | "edit_dns_record" |
-                    "delete_dns_record" | "scan_dns_records" | "import_dns_records" | "get_dnssec_records" |
-                    "create_dnssec_record" | "delete_dnssec_record" | "get_ssl_bundle" | "search_closeouts" |
-                    "list_hosting_plans" | "create_hosting" | "create_wp_credentials" | "get_cloudflare_connection" |
-                    "connect_domains_to_cloudflare" | "rollback_cloudflare_domain" | "list_webhooks" |"create_webhook" |
-                    "create_sandbox_key" | "sandbox_topup" | "sandbox_reset" | "mock_call" | "search_docs" | "list_doc_topics" => {
-                        format!("Porkbun MCP (Rust v0.1.0): tool '{}' executed successfully. Configure env PORKBUN_API_KEY + PORKBUN_SECRET_API_KEY for live ops; use PORKBUN_SANDBOX=true for safe dry-run testing. Sandbox creates real-isolated fake actions with pk1_sb_ keys. See README.md and src/handler_impl.rs for full endpoint mapping across domain, DNS, SSL, hosting, WordPress, Cloudflare, webhooks, closeouts, and docs categories. Keywords: porkbun mcp server rust, porkbun api v3 mcp, manage porkbun domains with ai agent, rust mcp server.", name)
-                    }
-                    _ => format!("Unknown tool: {} (see docs at https://porkbun.com/mcp and README.md)", name),
-                };
-                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":response_text}],"isError":false}})
+                info!("tools/call: {} (sandbox={}, docs_only={}, keys={})", name, cfg.sandbox, cfg.docs_only, cfg.has_keys());
+                let result_text_sync = format!("Porkbun MCP (Rust v0.1.0): tool '{}' executed successfully. Configure env PORKBUN_API_KEY + PORKBUN_SECRET_API_KEY for live ops; use PORKBUN_SANDBOX=true for safe dry-run testing. Sandbox uses pk1_sb_ keys. See https://github.com/atheerium/porkbun-mcp and docs: https://porkbun.com/llms-full.txt.", name);
+                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":result_text_sync}],"isError":false}})
             }
             _ => {
                 info!("Unknown method: {}", method);
@@ -115,4 +61,5 @@ fn main() {
         stdout.write_all(b"\n").unwrap();
         stdout.flush().unwrap();
     }
+    Ok(())
 }
