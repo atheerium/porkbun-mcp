@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"attr":["prompt","prompt_handler","prompt_router","tool","tool_handler","tool_router"],"enum":["RmcpError"],"macro":[["const_string",1],["object",1],"paste"],"mod":["handler","model","service","task_manager","transport"]};

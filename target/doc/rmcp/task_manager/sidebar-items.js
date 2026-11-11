@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"constant":["DEFAULT_POLL_INTERVAL_MS","DEFAULT_TASK_TTL_MS"],"enum":["TaskExit"],"fn":["current_timestamp"],"struct":["TaskContext","TaskManager","TaskOptions"],"type":["TaskFuture"]};

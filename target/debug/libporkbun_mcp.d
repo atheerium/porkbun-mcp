@@ -1,1 +1,0 @@
-/home/atheerium/money/domains/porkbun-mcp/target/debug/libporkbun_mcp.rlib: /home/atheerium/money/domains/porkbun-mcp/src/client.rs /home/atheerium/money/domains/porkbun-mcp/src/config.rs /home/atheerium/money/domains/porkbun-mcp/src/lib.rs
